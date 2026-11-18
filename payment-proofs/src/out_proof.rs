@@ -1,10 +1,10 @@
-use core::{ops::Deref, fmt};
+use core::{ops::Deref as _, fmt};
 use std_shims::{string::String, vec::Vec, vec};
 
 use zeroize::{Zeroize, Zeroizing};
 use rand_core::{RngCore, CryptoRng};
 
-use sha3::{Digest, Keccak256};
+use sha3::{Digest as _, Keccak256};
 use curve25519_dalek::{
   constants::{ED25519_BASEPOINT_POINT, ED25519_BASEPOINT_TABLE},
   scalar::Scalar,
@@ -16,6 +16,7 @@ use monero_wallet::{
   transaction::Transaction,
   address::Address,
   extra::{PaymentId, Extra},
+  ed25519::{Point, CompressedPoint, Scalar as OxideScalar},
 };
 
 use crate::shared_key_derivations::SharedKeyDerivations;
@@ -34,7 +35,7 @@ pub struct OutProof {
 
 impl OutProof {
   fn challenge<const ADDRESS_BYTES: u128>(
-    address: Address<{ ADDRESS_BYTES }>,
+    address: &Address<{ ADDRESS_BYTES }>,
     nonce_commitment_generator: EdwardsPoint,
     nonce_commitment_view_key: EdwardsPoint,
     ephemeral_key_commitment: EdwardsPoint,
@@ -59,10 +60,10 @@ impl OutProof {
     // R
     keccak.update(ephemeral_key_commitment.compress().to_bytes());
     // A
-    keccak.update(address.view().compress().to_bytes());
+    keccak.update(address.view().into().compress().to_bytes());
     // B
     if address.is_subaddress() {
-      keccak.update(address.spend().compress().to_bytes());
+      keccak.update(address.spend().into().compress().to_bytes());
     } else {
       keccak.update([0; 32]);
     }
@@ -78,15 +79,15 @@ impl OutProof {
   /// addresses.
   pub fn prove<const ADDRESS_BYTES: u128>(
     rng: &mut (impl RngCore + CryptoRng),
-    address: Address<{ ADDRESS_BYTES }>,
+    address: &Address<{ ADDRESS_BYTES }>,
     ephemeral_key: &Zeroizing<Scalar>,
     message: &[u8],
   ) -> Self {
     let nonce = Zeroizing::new(Scalar::random(rng));
     let commitment_generator =
-      if address.is_subaddress() { address.spend() } else { ED25519_BASEPOINT_POINT };
+      if address.is_subaddress() { address.spend().into() } else { ED25519_BASEPOINT_POINT };
     let commit = |value: &Zeroizing<Scalar>| {
-      (commitment_generator * value.deref(), address.view() * value.deref())
+      (commitment_generator * value.deref(), address.view().into() * value.deref())
     };
     let (nonce_commitment_generator, nonce_commitment_view_key) = commit(&nonce);
     let (ephemeral_key_commitment, ecdh) = commit(ephemeral_key);
@@ -111,15 +112,15 @@ impl OutProof {
     self,
     tx: &Transaction,
     output_index: usize,
-    address: Address<{ ADDRESS_BYTES }>,
+    address: &Address<{ ADDRESS_BYTES }>,
     message: &[u8],
   ) -> Option<u64> {
     let commitment_generator =
-      if address.is_subaddress() { address.spend() } else { ED25519_BASEPOINT_POINT };
+      if address.is_subaddress() { address.spend().into() } else { ED25519_BASEPOINT_POINT };
 
     let OutProof { ecdh, c, s } = self;
     let s_commitment_generator = commitment_generator * s;
-    let s_commitment_view_key = address.view() * s;
+    let s_commitment_view_key = address.view().into() * s;
 
     let extra = Extra::read(&mut tx.prefix().extra.as_slice()).ok()?;
     let (keys, additional_keys) = extra.keys()?;
@@ -129,6 +130,7 @@ impl OutProof {
       .chain(core::iter::once(additional_keys.and_then(|keys| keys.get(output_index).copied())));
 
     while let Some(Some(key)) = keys.next() {
+      let key = key.into();
       if c ==
         Self::challenge(
           address,
@@ -143,7 +145,7 @@ impl OutProof {
 
         let shared_key_derivations = SharedKeyDerivations::output_derivations(
           address.is_guaranteed().then(|| SharedKeyDerivations::uniqueness(&tx.prefix().inputs)),
-          Zeroizing::new(ecdh),
+          Zeroizing::new(Point::from(ecdh)),
           output_index,
         );
 
@@ -155,9 +157,11 @@ impl OutProof {
         }
 
         // Check the output's key
-        if output.key !=
-          (address.spend() + (&shared_key_derivations.shared_key * ED25519_BASEPOINT_TABLE))
+        if output.key.to_bytes() !=
+          (address.spend().into() +
+            (&shared_key_derivations.shared_key.into() * ED25519_BASEPOINT_TABLE))
             .compress()
+            .to_bytes()
         {
           None?;
         }
@@ -165,7 +169,8 @@ impl OutProof {
         // Check the payment ID, if one was expected
         if let Some(payment_id) = address.payment_id() {
           if PaymentId::Encrypted(payment_id) !=
-            (extra.payment_id()? ^ SharedKeyDerivations::payment_id_xor(Zeroizing::new(ecdh)))
+            (extra.payment_id()? ^
+              SharedKeyDerivations::payment_id_xor(Zeroizing::new(Point::from(ecdh))))
           {
             None?;
           }
@@ -184,7 +189,7 @@ impl OutProof {
             shared_key_derivations.decrypt(proofs.base.encrypted_amounts.get(output_index)?);
 
           // Rebuild the commitment to verify it
-          if Some(&commitment.calculate()) != proofs.base.commitments.get(output_index) {
+          if Some(&commitment.commit().compress()) != proofs.base.commitments.get(output_index) {
             None?;
           }
 
@@ -236,9 +241,9 @@ impl OutProof {
         }
 
         res.push(OutProof {
-          ecdh: monero_wallet::io::read_point(&mut ecdh.as_slice()).ok()?,
-          c: monero_wallet::io::read_scalar(&mut &signature[.. 32]).ok()?,
-          s: monero_wallet::io::read_scalar(&mut &signature[32 ..]).ok()?,
+          ecdh: CompressedPoint::read(&mut ecdh.as_slice()).ok()?.decompress()?.into(),
+          c: OxideScalar::read(&mut &signature[.. 32]).ok()?.into(),
+          s: OxideScalar::read(&mut &signature[32 ..]).ok()?.into(),
         });
       }
     }

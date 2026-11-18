@@ -6,7 +6,7 @@ license = "MIT"
 repository = "https://github.com/monero-oxide/monero-wallet-util/tree/main/payment-proofs"
 authors = ["Luke Parker <lukeparker5132@gmail.com>"]
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.89"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -22,7 +22,7 @@ zeroize = { version = "^1.5", default-features = false, features = ["zeroize_der
 rand_core = { version = "0.6", default-features = false }
 
 sha3 = { version = "0.10", default-features = false }
-curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize"] }
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc", "zeroize", "rand_core", "precomputed-tables"] }
 
 monero-base58 = { git = "https://github.com/monero-oxide/monero-oxide", default-features = false }
 monero-wallet = { git = "https://github.com/monero-oxide/monero-oxide", default-features = false }

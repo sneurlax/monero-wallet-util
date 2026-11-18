@@ -2,14 +2,11 @@
 // deduplicate this code. TODO
 
 use std_shims::vec::Vec;
-
 use zeroize::{Zeroize, Zeroizing};
-
-use curve25519_dalek::{Scalar, EdwardsPoint};
-
 use monero_wallet::{
-  io::write_varint,
-  primitives::{Commitment, keccak256, keccak256_to_scalar},
+  io::VarInt,
+  ed25519::{Point, Scalar, Commitment},
+  primitives::keccak256,
   ringct::EncryptedAmount,
   transaction::Input,
 };
@@ -31,71 +28,71 @@ impl SharedKeyDerivations {
         // If Gen, this should be the only input, making this loop somewhat pointless
         // This works and even if there were somehow multiple inputs, it'd be a false negative
         Input::Gen(height) => {
-          write_varint(height, &mut u).unwrap();
+          VarInt::write(height, &mut u).expect("write failed but <Vec as io::Write> doesn't fail");
         }
-        Input::ToKey { key_image, .. } => u.extend(key_image.compress().to_bytes()),
+        Input::ToKey { key_image, .. } => u.extend(key_image.to_bytes()),
       }
     }
     keccak256(u)
   }
 
-  #[allow(clippy::needless_pass_by_value)]
+  #[expect(clippy::needless_pass_by_value)]
   pub(crate) fn output_derivations(
     uniqueness: Option<[u8; 32]>,
-    ecdh: Zeroizing<EdwardsPoint>,
+    ecdh: Zeroizing<Point>,
     o: usize,
   ) -> Zeroizing<SharedKeyDerivations> {
     // 8Ra
     let mut output_derivation = Zeroizing::new(
-      Zeroizing::new(Zeroizing::new(ecdh.mul_by_cofactor()).compress().to_bytes()).to_vec(),
+      Zeroizing::new(Zeroizing::new((*ecdh).into().mul_by_cofactor()).compress().to_bytes())
+        .to_vec(),
     );
 
     // || o
     {
       let output_derivation: &mut Vec<u8> = output_derivation.as_mut();
-      write_varint(&o, output_derivation).unwrap();
+      VarInt::write(&o, output_derivation)
+        .expect("write failed but <Vec as io::Write> doesn't fail");
     }
 
-    let view_tag = keccak256([b"view_tag".as_ref(), &output_derivation].concat())[0];
+    let view_tag = keccak256([b"view_tag".as_slice(), &output_derivation].concat())[0];
 
     // uniqueness ||
     let output_derivation = if let Some(uniqueness) = uniqueness {
-      Zeroizing::new([uniqueness.as_ref(), &output_derivation].concat())
+      Zeroizing::new([uniqueness.as_slice(), &output_derivation].concat())
     } else {
       output_derivation
     };
 
-    Zeroizing::new(SharedKeyDerivations {
-      view_tag,
-      shared_key: keccak256_to_scalar(&output_derivation),
-    })
+    Zeroizing::new(SharedKeyDerivations { view_tag, shared_key: Scalar::hash(&output_derivation) })
   }
 
   // H(8Ra || 0x8d)
-  #[allow(clippy::needless_pass_by_value)]
-  pub(crate) fn payment_id_xor(ecdh: Zeroizing<EdwardsPoint>) -> [u8; 8] {
+  #[expect(clippy::needless_pass_by_value)]
+  pub(crate) fn payment_id_xor(ecdh: Zeroizing<Point>) -> [u8; 8] {
     // 8Ra
     let output_derivation = Zeroizing::new(
-      Zeroizing::new(Zeroizing::new(ecdh.mul_by_cofactor()).compress().to_bytes()).to_vec(),
+      Zeroizing::new(Zeroizing::new((*ecdh).into().mul_by_cofactor()).compress().to_bytes())
+        .to_vec(),
     );
 
     let mut payment_id_xor = [0; 8];
     payment_id_xor
-      .copy_from_slice(&keccak256([output_derivation.as_ref(), [0x8d].as_ref()].concat())[.. 8]);
+      .copy_from_slice(&keccak256([output_derivation.as_slice(), &[0x8d]].concat())[.. 8]);
     payment_id_xor
   }
 
   pub(crate) fn commitment_mask(&self) -> Scalar {
     let mut mask = b"commitment_mask".to_vec();
-    mask.extend(self.shared_key.as_bytes());
-    let res = keccak256_to_scalar(&mask);
+    mask.extend(&<[u8; 32]>::from(self.shared_key));
+    let res = Scalar::hash(&mask);
     mask.zeroize();
     res
   }
 
   pub(crate) fn compact_amount_encryption(&self, amount: u64) -> [u8; 8] {
     let mut amount_mask = Zeroizing::new(b"amount".to_vec());
-    amount_mask.extend(self.shared_key.to_bytes());
+    amount_mask.extend(<[u8; 32]>::from(self.shared_key));
     let mut amount_mask = keccak256(&amount_mask);
 
     let mut amount_mask_8 = [0; 8];
@@ -108,17 +105,21 @@ impl SharedKeyDerivations {
   pub(crate) fn decrypt(&self, enc_amount: &EncryptedAmount) -> Commitment {
     match enc_amount {
       EncryptedAmount::Original { mask, amount } => {
-        let mask_shared_sec = keccak256(self.shared_key.as_bytes());
-        let mask =
-          Scalar::from_bytes_mod_order(*mask) - Scalar::from_bytes_mod_order(mask_shared_sec);
+        let mask_shared_sec = keccak256(<[u8; 32]>::from(self.shared_key));
+        let mask = curve25519_dalek::Scalar::from_bytes_mod_order(*mask) -
+          curve25519_dalek::Scalar::from_bytes_mod_order(mask_shared_sec);
 
         let amount_shared_sec = keccak256(mask_shared_sec);
-        let amount_scalar =
-          Scalar::from_bytes_mod_order(*amount) - Scalar::from_bytes_mod_order(amount_shared_sec);
+        let amount_scalar = curve25519_dalek::Scalar::from_bytes_mod_order(*amount) -
+          curve25519_dalek::Scalar::from_bytes_mod_order(amount_shared_sec);
         // d2b from rctTypes.cpp
-        let amount = u64::from_le_bytes(amount_scalar.to_bytes()[0 .. 8].try_into().unwrap());
+        let amount = u64::from_le_bytes(
+          amount_scalar.to_bytes()[.. 8]
+            .try_into()
+            .expect("32-byte array couldn't have an 8-byte slice taken"),
+        );
 
-        Commitment::new(mask, amount)
+        Commitment::new(Scalar::from(mask), amount)
       }
       EncryptedAmount::Compact { amount } => Commitment::new(
         self.commitment_mask(),
