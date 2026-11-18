@@ -1,4 +1,4 @@
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc = include_str!("../README.md")]
 #![deny(missing_docs)]
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -9,3 +9,9 @@ pub use monero_wallet::*;
 pub mod seed;
 /// Payment proofs for Monero transactions.
 pub use monero_payment_proofs as payment_proofs;
+
+/// Deserialization of EPEE-encoded values.
+pub mod epee {
+  pub use monero_epee_traits::*;
+  pub use monero_epee_derive::*;
+}
