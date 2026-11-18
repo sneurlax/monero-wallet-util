@@ -223,29 +223,28 @@ impl OutProof {
     let signature_len = base58::encode(&[0; 64]).len();
 
     let mut res = vec![];
-    if let Some(mut proofs) = proofs.strip_prefix("OutProofV2") {
-      while !proofs.is_empty() {
-        if proofs.len() < (ecdh_len + signature_len) {
-          None?;
-        }
-        let ecdh = base58::decode(proofs.get(.. ecdh_len)?)?;
-        #[allow(clippy::string_slice)] // Safe via immediately prior `get`
-        {
-          proofs = &proofs[ecdh_len ..];
-        }
-
-        let signature = base58::decode(proofs.get(.. signature_len)?)?;
-        #[allow(clippy::string_slice)] // Safe via immediately prior `get`
-        {
-          proofs = &proofs[signature_len ..];
-        }
-
-        res.push(OutProof {
-          ecdh: CompressedPoint::read(&mut ecdh.as_slice()).ok()?.decompress()?.into(),
-          c: OxideScalar::read(&mut &signature[.. 32]).ok()?.into(),
-          s: OxideScalar::read(&mut &signature[32 ..]).ok()?.into(),
-        });
+    let mut proofs = proofs.strip_prefix("OutProofV2")?;
+    while !proofs.is_empty() {
+      if proofs.len() < (ecdh_len + signature_len) {
+        None?;
       }
+      let ecdh = base58::decode(proofs.get(.. ecdh_len)?)?;
+      #[allow(clippy::string_slice)] // Safe via immediately prior `get`
+      {
+        proofs = &proofs[ecdh_len ..];
+      }
+
+      let signature = base58::decode(proofs.get(.. signature_len)?)?;
+      #[allow(clippy::string_slice)] // Safe via immediately prior `get`
+      {
+        proofs = &proofs[signature_len ..];
+      }
+
+      res.push(OutProof {
+        ecdh: CompressedPoint::read(&mut ecdh.as_slice()).ok()?.decompress()?.into(),
+        c: OxideScalar::read(&mut &signature[.. 32]).ok()?.into(),
+        s: OxideScalar::read(&mut &signature[32 ..]).ok()?.into(),
+      });
     }
     Some(res)
   }
