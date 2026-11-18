@@ -1,6 +1,8 @@
 // This is copied from monero-wallet. monero-wallet should make this pub, allowing us to
 // deduplicate this code. TODO
-
+//
+// Copied as of a941dfff1a5333b6349d9a1ee5de49c158b0e3d2.
+use core::ops::Deref as _;
 use std_shims::vec::Vec;
 use zeroize::{Zeroize, Zeroizing};
 use monero_wallet::{
@@ -105,16 +107,21 @@ impl SharedKeyDerivations {
   pub(crate) fn decrypt(&self, enc_amount: &EncryptedAmount) -> Commitment {
     match enc_amount {
       EncryptedAmount::Original { mask, amount } => {
-        let mask_shared_sec = keccak256(<[u8; 32]>::from(self.shared_key));
-        let mask = curve25519_dalek::Scalar::from_bytes_mod_order(*mask) -
-          curve25519_dalek::Scalar::from_bytes_mod_order(mask_shared_sec);
+        let mask_shared_sec_scalar =
+          Zeroizing::new(Scalar::hash(Zeroizing::new(<[u8; 32]>::from(self.shared_key))));
+        let amount_shared_sec_scalar =
+          Zeroizing::new(Scalar::hash(<[u8; 32]>::from(*mask_shared_sec_scalar)));
 
-        let amount_shared_sec = keccak256(mask_shared_sec);
-        let amount_scalar = curve25519_dalek::Scalar::from_bytes_mod_order(*amount) -
-          curve25519_dalek::Scalar::from_bytes_mod_order(amount_shared_sec);
+        let mask =
+          curve25519_dalek::Scalar::from_bytes_mod_order(*mask) - (*mask_shared_sec_scalar).into();
+        let amount_scalar = Zeroizing::new(
+          curve25519_dalek::Scalar::from_bytes_mod_order(*amount) -
+            (*amount_shared_sec_scalar).into(),
+        );
+
         // d2b from rctTypes.cpp
         let amount = u64::from_le_bytes(
-          amount_scalar.to_bytes()[.. 8]
+          Zeroizing::new(amount_scalar.to_bytes()).deref()[.. 8]
             .try_into()
             .expect("32-byte array couldn't have an 8-byte slice taken"),
         );
