@@ -1,0 +1,18 @@
+name: Payment proof checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # 6.0.0
+      - run: cargo test --locked -p monero-payment-proofs --all-features
+      - run: cargo check --locked -p monero-payment-proofs --no-default-features
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --locked -p monero-payment-proofs --target wasm32-unknown-unknown --features js
+      - run: cargo check --locked -p monero-payment-proofs --target wasm32-unknown-unknown --no-default-features --features js

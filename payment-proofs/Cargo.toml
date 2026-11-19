@@ -12,6 +12,9 @@ rust-version = "1.89"
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
+[package.metadata.cargo-machete]
+ignored = ["getrandom"]
+
 [lints]
 workspace = true
 
@@ -27,10 +30,14 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 monero-base58 = { git = "https://github.com/monero-oxide/monero-oxide", default-features = false }
 monero-wallet = { git = "https://github.com/monero-oxide/monero-oxide", default-features = false }
 
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.2", default-features = false, optional = true }
+
 [dev-dependencies]
 hex = "0.4"
 
 [features]
+js = ["dep:getrandom", "getrandom/js"]
 std = [
   "std-shims/std",
 
